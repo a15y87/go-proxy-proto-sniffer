@@ -16,6 +16,7 @@ import (
 	"io"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 )
 
 var iface = flag.String("i", "eth0", "Interface to get packets from")
@@ -148,7 +149,7 @@ func (bd *bidi) maybeFinish() {
 			rs:=bytes.NewReader(bd.b.data)
 			rsb:=bufio.NewReader(rs)
 			h1, hs, bs, _ := ReadResponse(rsb)
-			log.Printf("\n[%v] FINISHED: %s %s\n%v\n%v\n%s\n%v\n%v\n", bd.key, ProxyHeader, method, header, body, h1, hs, bs )
+			log.Printf("\n[%v] FINISHED: %s %s\n%s\n%s\n%s\n%s\n%s\n", bd.key, ProxyHeader, method, header, body, h1, hs, bs )
 		}
 	}
 }
@@ -156,10 +157,10 @@ func (bd *bidi) maybeFinish() {
 var textprotoReaderPool sync.Pool
 //type Header map[string][]string
 
-func ReadResponse(b *bufio.Reader) (ProxyHeader string, header textproto.MIMEHeader, body string,  err error) {
+func ReadResponse(b *bufio.Reader) (method, header, body string,  err error) {
 	tp := newTextprotoReader(b)
 
-	if ProxyHeader, err = tp.ReadLine() ; err != nil {
+	if method, err = tp.ReadLine() ; err != nil {
 //		return "", "", err
 	}
 
@@ -171,11 +172,13 @@ func ReadResponse(b *bufio.Reader) (ProxyHeader string, header textproto.MIMEHea
 	}()
 
 	mimeHeader, err := tp.ReadMIMEHeader()
-	header = mimeHeader
+	sheader, err := json.Marshal(mimeHeader)
+	header = string(sheader)
+
 	buf := new(bytes.Buffer)
 	var reader io.Reader
 
-	switch header.Get("Content-Encoding") {
+	switch mimeHeader.Get("Content-Encoding") {
 	case "gzip":
 		reader, err = gzip.NewReader(b)
 		if err != nil {
@@ -187,30 +190,31 @@ func ReadResponse(b *bufio.Reader) (ProxyHeader string, header textproto.MIMEHea
 	buf.ReadFrom(reader)
 	body = buf.String()
 
-	return ProxyHeader, header, body, err
+	return method, header, body, err
 }
 
-func ReadRequest(b *bufio.Reader) (ProxyHeader, method string,  header textproto.MIMEHeader, body string,  err error) {
+func ReadRequest(b *bufio.Reader) (ProxyHeader, method, header, body string,  err error) {
 	tp := newTextprotoReader(b)
 
 	if ProxyHeader, err = tp.ReadLine() ; err != nil {
 	}
-	method, _ = tp.ReadLine()
+
 	defer func() {
 		putTextprotoReader(tp)
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
 	}()
-
+	method, _ = tp.ReadLine()
 
 	mimeHeader, err := tp.ReadMIMEHeader()
-	header = mimeHeader
+	sheader, err := json.Marshal(mimeHeader)
+	header = string(sheader)
 
 	buf := new(bytes.Buffer)
 	var reader io.Reader
 
-	switch header.Get("Content-Encoding") {
+	switch mimeHeader.Get("Content-Encoding") {
 	case "gzip":
 		reader, err = gzip.NewReader(b)
 		if err != nil {
