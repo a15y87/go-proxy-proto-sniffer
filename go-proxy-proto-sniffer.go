@@ -222,7 +222,7 @@ func ReadRequest(b *bufio.Reader) (ProxyHeader, method string,  header textproto
 	buf.ReadFrom(reader)
 	body = buf.String()
 
-	return ProxyHeader, header, body, err
+	return ProxyHeader, method, header, body, err
 }
 
 
