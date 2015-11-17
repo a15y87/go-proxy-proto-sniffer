@@ -144,11 +144,11 @@ func (bd *bidi) maybeFinish() {
 		if bd.a.bytes > 0 && bd.b.bytes > 0 {
 			r:=bytes.NewReader(bd.a.data)
 			rb:=bufio.NewReader(r)
-			ProxyHeader, header, body, _ :=ReadRequest(rb)
+			ProxyHeader, method, header, body, _ := ReadRequest(rb)
 			rs:=bytes.NewReader(bd.b.data)
 			rsb:=bufio.NewReader(rs)
-			h1, hs, bs, _ :=ReadRequest(rsb)
-			log.Printf("\n[%v] FINISHED: %s\n%v\n%v\n%s\n%v\n%v\n", bd.key,ProxyHeader, header, body, h1, hs, bs )
+			h1, hs, bs, _ := ReadResponse(rsb)
+			log.Printf("\n[%v] FINISHED: %s %s\n%v\n%v\n%s\n%v\n%v\n", bd.key, ProxyHeader, method, header, body, h1, hs, bs )
 		}
 	}
 }
@@ -156,7 +156,7 @@ func (bd *bidi) maybeFinish() {
 var textprotoReaderPool sync.Pool
 //type Header map[string][]string
 
-func ReadRequest(b *bufio.Reader) (ProxyHeader string, header textproto.MIMEHeader, body string,  err error) {
+func ReadResponse(b *bufio.Reader) (ProxyHeader string, header textproto.MIMEHeader, body string,  err error) {
 	tp := newTextprotoReader(b)
 
 	if ProxyHeader, err = tp.ReadLine() ; err != nil {
@@ -170,19 +170,42 @@ func ReadRequest(b *bufio.Reader) (ProxyHeader string, header textproto.MIMEHead
 		}
 	}()
 
+	mimeHeader, err := tp.ReadMIMEHeader()
+	header = mimeHeader
+	buf := new(bytes.Buffer)
+	var reader io.Reader
+
+	switch header.Get("Content-Encoding") {
+	case "gzip":
+		reader, err = gzip.NewReader(b)
+		if err != nil {
+			reader = b
+		}
+	default:
+		reader = b
+	}
+	buf.ReadFrom(reader)
+	body = buf.String()
+
+	return ProxyHeader, header, body, err
+}
+
+func ReadRequest(b *bufio.Reader) (ProxyHeader, method string,  header textproto.MIMEHeader, body string,  err error) {
+	tp := newTextprotoReader(b)
+
+	if ProxyHeader, err = tp.ReadLine() ; err != nil {
+	}
+	method, _ = tp.ReadLine()
+	defer func() {
+		putTextprotoReader(tp)
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
+	}()
+
 
 	mimeHeader, err := tp.ReadMIMEHeader()
-//	if err != nil {
-//		return "", nil, err
-//	}
 	header = mimeHeader
-
-
-
-//	err = readTransfer(req, b)
-//	if err != nil {
-//		return nil, err
-//	}
 
 	buf := new(bytes.Buffer)
 	var reader io.Reader
@@ -201,6 +224,7 @@ func ReadRequest(b *bufio.Reader) (ProxyHeader string, header textproto.MIMEHead
 
 	return ProxyHeader, header, body, err
 }
+
 
 func putTextprotoReader(r *textproto.Reader) {
 	r.R = nil
