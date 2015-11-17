@@ -69,12 +69,12 @@ func (f *myFactory) New(netFlow, tcpFlow gopacket.Flow) tcpassembly.Stream {
 	bd := f.bidiMap[k]
 	if bd == nil {
 		bd = &bidi{a: s, key: k}
-		log.Printf("[%v] created first side of bidirectional stream", bd.key)
+//		log.Printf("[%v] created first side of bidirectional stream", bd.key)
 		// Register bidirectional with the reverse key, so the matching stream going
 		// the other direction will find it.
 		f.bidiMap[key{netFlow.Reverse(), tcpFlow.Reverse()}] = bd
 	} else {
-		log.Printf("[%v] found second side of bidirectional stream", bd.key)
+//		log.Printf("[%v] found second side of bidirectional stream", bd.key)
 		bd.b = s
 		// Clear out the bidi we're using from the map, just in case.
 		delete(f.bidiMap, k)
@@ -133,19 +133,19 @@ func (bd *bidi) maybeFinish() {
 	case bd.a == nil:
 		log.Fatalf("[%v] a should always be non-nil, since it's set when bidis are created", bd.key)
 	case !bd.a.done:
-		log.Printf("[%v] still waiting on first stream", bd.key)
+//		log.Printf("[%v] still waiting on first stream", bd.key)
 	case bd.b == nil:
-		log.Printf("[%v] no second stream yet", bd.key)
+//		log.Printf("[%v] no second stream yet", bd.key)
 	case !bd.b.done:
-		log.Printf("[%v] still waiting on second stream", bd.key)
+//		log.Printf("[%v] still waiting on second stream", bd.key)
 	default:
-		log.Printf("[%v] FINISHED, bytes: %d tx\n%s\n%s", bd.key, bd.a.bytes, bd.a.data, bd.b.data)
+		log.Printf("[%v] FINISHED\n%s\n%s", bd.key, bd.a.data, bd.b.data)
 	}
 }
 
 func main() {
 	defer util.Run()()
-	log.Printf("starting capture on interface %q", *iface)
+//	log.Printf("starting capture on interface %q", *iface)
 	// Set up pcap packet capture
 	handle, err := pcap.OpenLive(*iface, int32(*snaplen), true, pcap.BlockForever)
 	if err != nil {
@@ -160,7 +160,7 @@ func main() {
 	streamPool := tcpassembly.NewStreamPool(streamFactory)
 	assembler := tcpassembly.NewAssembler(streamPool)
 
-	log.Println("reading in packets")
+//	log.Println("reading in packets")
 	// Read in packets, pass to assembler.
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	packets := packetSource.Packets()
@@ -180,7 +180,7 @@ func main() {
 
 		case <-ticker:
 		// Every minute, flush connections that haven't seen activity in the past minute.
-			log.Println("---- FLUSHING ----")
+//			log.Println("---- FLUSHING ----")
 			assembler.FlushOlderThan(time.Now().Add(-timeout))
 			streamFactory.collectOldStreams()
 		}
