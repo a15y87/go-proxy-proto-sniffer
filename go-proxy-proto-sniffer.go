@@ -190,6 +190,9 @@ func ReadRequest(b *bufio.Reader) (ProxyHeader string, header textproto.MIMEHead
 	switch header.Get("Content-Encoding") {
 	case "gzip":
 		reader, err = gzip.NewReader(b)
+		if err != nil {
+			reader = b
+		}
 	default:
 		reader = b
 	}
