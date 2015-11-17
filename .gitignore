@@ -22,3 +22,7 @@ _testmain.go
 *.exe
 *.test
 *.prof
+
+go-proxy-proto-sniffer.iml
+/.idea
+go-proxy-proto-sniffer
