@@ -8,16 +8,19 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/tcpassembly"
-	//"github.com/google/gopacket/tcpassembly/tcpreader"
+	"net/textproto"
 	"log"
 	"time"
-	//"bytes"
+	"bufio"
+	"sync"
+	"io"
+	"bytes"
+	"compress/gzip"
 )
 
 var iface = flag.String("i", "eth0", "Interface to get packets from")
-var snaplen = flag.Int("s", 16<<10, "SnapLen for pcap packet capture")
+var snaplen = flag.Int("s", 32<<10, "SnapLen for pcap packet capture")
 var filter = flag.String("f", "tcp", "BPF filter for pcap")
-var logAllPackets = flag.Bool("v", false, "Logs every packet in great detail")
 
 // key is used to map bidirectional streams to each other.
 type key struct {
@@ -31,7 +34,7 @@ func (k key) String() string {
 
 // timeout is the length of time to wait befor flushing connections and
 // bidirectional stream pairs.
-const timeout time.Duration = time.Minute * 5
+const timeout time.Duration = time.Minute * 1
 
 // myStream implements tcpassembly.Stream
 type myStream struct {
@@ -69,12 +72,10 @@ func (f *myFactory) New(netFlow, tcpFlow gopacket.Flow) tcpassembly.Stream {
 	bd := f.bidiMap[k]
 	if bd == nil {
 		bd = &bidi{a: s, key: k}
-//		log.Printf("[%v] created first side of bidirectional stream", bd.key)
 		// Register bidirectional with the reverse key, so the matching stream going
 		// the other direction will find it.
 		f.bidiMap[key{netFlow.Reverse(), tcpFlow.Reverse()}] = bd
 	} else {
-//		log.Printf("[%v] found second side of bidirectional stream", bd.key)
 		bd.b = s
 		// Clear out the bidi we're using from the map, just in case.
 		delete(f.bidiMap, k)
@@ -94,7 +95,7 @@ func (f *myFactory) collectOldStreams() {
 	cutoff := time.Now().Add(-timeout)
 	for k, bd := range f.bidiMap {
 		if bd.lastPacketSeen.Before(cutoff) {
-			log.Printf("[%v] timing out old stream", bd.key)
+			//log.Printf("[%v] timing out old stream", bd.key)
 			bd.b = emptyStream   // stub out b with an empty stream.
 			delete(f.bidiMap, k) // remove it from our map.
 			bd.maybeFinish()     // if b was the last stream we were waiting for, finish up.
@@ -139,8 +140,77 @@ func (bd *bidi) maybeFinish() {
 	case !bd.b.done:
 //		log.Printf("[%v] still waiting on second stream", bd.key)
 	default:
-		log.Printf("[%v] FINISHED\n%s\n%s", bd.key, bd.a.data, bd.b.data)
+		//log.Printf("[%v] FINISHED\n%s\n%s", bd.key, bd.a.data, bd.b.data)
+		if bd.a.bytes > 0 && bd.b.bytes > 0 {
+			r:=bytes.NewReader(bd.a.data)
+			rb:=bufio.NewReader(r)
+			ProxyHeader, header, body, _ :=ReadRequest(rb)
+			rs:=bytes.NewReader(bd.b.data)
+			rsb:=bufio.NewReader(rs)
+			h1, hs, bs, _ :=ReadRequest(rsb)
+			log.Printf("\n[%v] FINISHED: %s\n%v\n%v\n%s\n%v\n%v\n", bd.key,ProxyHeader, header, body, h1, hs, bs )
+		}
 	}
+}
+
+var textprotoReaderPool sync.Pool
+//type Header map[string][]string
+
+func ReadRequest(b *bufio.Reader) (ProxyHeader string, header textproto.MIMEHeader, body string,  err error) {
+	tp := newTextprotoReader(b)
+
+	if ProxyHeader, err = tp.ReadLine() ; err != nil {
+//		return "", "", err
+	}
+
+	defer func() {
+		putTextprotoReader(tp)
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
+	}()
+
+
+	mimeHeader, err := tp.ReadMIMEHeader()
+//	if err != nil {
+//		return "", nil, err
+//	}
+	header = mimeHeader
+
+
+
+//	err = readTransfer(req, b)
+//	if err != nil {
+//		return nil, err
+//	}
+
+	buf := new(bytes.Buffer)
+	var reader io.Reader
+
+	switch header.Get("Content-Encoding") {
+	case "gzip":
+		reader, err = gzip.NewReader(b)
+	default:
+		reader = b
+	}
+	buf.ReadFrom(reader)
+	body = buf.String()
+
+	return ProxyHeader, header, body, err
+}
+
+func putTextprotoReader(r *textproto.Reader) {
+	r.R = nil
+	textprotoReaderPool.Put(r)
+}
+
+func newTextprotoReader(br *bufio.Reader) *textproto.Reader {
+	if v := textprotoReaderPool.Get(); v != nil {
+		tr := v.(*textproto.Reader)
+		tr.R = br
+		return tr
+	}
+	return textproto.NewReader(br)
 }
 
 func main() {
@@ -168,11 +238,8 @@ func main() {
 	for {
 		select {
 		case packet := <-packets:
-			if *logAllPackets {
-				log.Println(packet)
-			}
 			if packet.NetworkLayer() == nil || packet.TransportLayer() == nil || packet.TransportLayer().LayerType() != layers.LayerTypeTCP {
-				log.Println("Unusable packet")
+				//log.Println("Unusable packet")
 				continue
 			}
 			tcp := packet.TransportLayer().(*layers.TCP)
