@@ -17,6 +17,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+//	"net/http/internal"
+	"net/http/internal"
 )
 
 var iface = flag.String("i", "eth0", "Interface to get packets from")
@@ -176,16 +178,25 @@ func ReadResponse(b *bufio.Reader) (method, header, body string,  err error) {
 	header = string(sheader)
 
 	buf := new(bytes.Buffer)
-	var reader io.Reader
+	var r, reader io.Reader
+
+	//var chunked = false
+
+	if mimeHeader.Get("Transfer-Encoding")=="chunked" {
+		r=internal.NewChunkedReader(b)
+	} else {
+		r=b
+	}
+
 
 	switch mimeHeader.Get("Content-Encoding") {
 	case "gzip":
-		reader, err = gzip.NewReader(b)
+		reader, err = gzip.NewReader(r)
 		if err != nil {
-			reader = b
-		}
+			reader = r
+			}
 	default:
-		reader = b
+		reader = r
 	}
 	buf.ReadFrom(reader)
 	body = buf.String()
