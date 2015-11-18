@@ -17,13 +17,16 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
-//	"net/http/internal"
+	"github.com/fluent/fluent-logger-golang/fluent"
 	"net/http/internal"
+
 )
 
 var iface = flag.String("i", "eth0", "Interface to get packets from")
 var snaplen = flag.Int("s", 32<<10, "SnapLen for pcap packet capture")
 var filter = flag.String("f", "tcp", "BPF filter for pcap")
+var fluent_socket = flag.String("l", "/var/run/td-agent/td-agent.sock", "fluentd unix-socket path")
+var fluentd_tag = flag.String("t", "httpflow", "fluentd tag")
 
 // key is used to map bidirectional streams to each other.
 type key struct {
@@ -45,6 +48,17 @@ type myStream struct {
 	data []byte // payload
 	bidi  *bidi // maps to my bidirectional twin.
 	done  bool  // if true, we've seen the last packet we're going to for this stream.
+}
+
+type Message struct {
+	Key string
+	ResponseHeaders string
+	ResponseBody string
+	ResponseStatus string
+	RequestBody string
+	RequestMethod string
+	RequestHeaders string
+	ProxyHeader string
 }
 
 // bidi stores each unidirectional side of a bidirectional stream.
@@ -90,6 +104,8 @@ func (f *myFactory) New(netFlow, tcpFlow gopacket.Flow) tcpassembly.Stream {
 // emptyStream is used to finish bidi that only have one stream, in
 // collectOldStreams.
 var emptyStream = &myStream{done: true}
+var logger *fluent.Fluent
+
 
 // collectOldStreams finds any streams that haven't received a packet within
 // 'timeout', and sets/finishes the 'b' stream inside them.  The 'a' stream may
@@ -151,7 +167,24 @@ func (bd *bidi) maybeFinish() {
 			rs:=bytes.NewReader(bd.b.data)
 			rsb:=bufio.NewReader(rs)
 			h1, hs, bs, _ := ReadResponse(rsb)
-			log.Printf("\n[%v] FINISHED: %s %s\n%s\n%s\n%s\n%s\n%s\n", bd.key, ProxyHeader, method, header, body, h1, hs, bs )
+			// log.Printf("\n[%v] FINISHED: %s %s\n%s\n%s\n%s\n%s\n%s\n", bd.key, ProxyHeader, method, header, body, h1, hs, bs )
+
+			var http_data = Message{
+				Key: bd.key.String(),
+				RequestHeaders: header,
+				RequestMethod: method,
+				RequestBody: body,
+				ProxyHeader: ProxyHeader,
+				ResponseBody: bs,
+				ResponseHeaders: hs,
+				ResponseStatus: h1,
+
+			}
+
+			if err := logger.Post(*fluentd_tag, http_data); err != nil {
+				log.Fatal(err)
+			}
+
 		}
 	}
 }
@@ -236,7 +269,6 @@ func ReadRequest(b *bufio.Reader) (ProxyHeader, method, header, body string,  er
 	}
 	buf.ReadFrom(reader)
 	body = buf.String()
-
 	return ProxyHeader, method, header, body, err
 }
 
@@ -257,6 +289,12 @@ func newTextprotoReader(br *bufio.Reader) *textproto.Reader {
 
 func main() {
 	defer util.Run()()
+	var err error
+
+	f_config := fluent.Config{FluentSocketPath: *fluent_socket, FluentNetwork: "unix"}
+	logger, err = fluent.New(f_config)
+	defer logger.Close()
+
 //	log.Printf("starting capture on interface %q", *iface)
 	// Set up pcap packet capture
 	handle, err := pcap.OpenLive(*iface, int32(*snaplen), true, pcap.BlockForever)
